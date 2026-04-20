@@ -147,22 +147,49 @@
       return new Blob(chunks);
     }
 
-    async function loadChunks(prefix, count, ext) {
-      const chunks = [];
-      for (let i = 0; i < count; i++) {
-        const suffix = i.toString().padStart(2, '0');
-        const url = `${prefix}.file${suffix}.${ext}`;
-        statusText.innerText = `DOWNLOADING ${ext.toUpperCase()} [${i + 1}/${count}]`;
-        const blob = await fetchWithProgress(url);
-        chunks.push(blob);
-      }
-      return new Blob(chunks);
+    async function fetchChunk(prefix, index, ext) {
+      const suffix = index.toString().padStart(2, '0');
+      const url = `${prefix}.file${suffix}.${ext}`;
+      return fetchWithProgress(url);
+    }
+
+    async function loadChunksParallel(prefix, count, ext, concurrency = 6) {
+      const results = new Array(count);
+      let nextIndex = 0;
+      let active = 0;
+      let completed = 0;
+
+      return new Promise((resolve, reject) => {
+        function dispatch() {
+          while (active < concurrency && nextIndex < count) {
+            const i = nextIndex++;
+            active++;
+            fetchChunk(prefix, i, ext)
+              .then(blob => {
+                results[i] = blob;
+                active--;
+                completed++;
+                statusText.innerText = `DOWNLOADING ${ext.toUpperCase()} [${completed}/${count}]`;
+                if (completed === count) {
+                  resolve(new Blob(results));
+                } else {
+                  dispatch();
+                }
+              })
+              .catch(reject);
+          }
+        }
+        dispatch();
+      });
     }
 
     async function start() {
       try {
-        const dataBlob = await loadChunks(DATA_PREFIX, DATA_CHUNKS, "data");
-        const wasmBlob = await loadChunks(WASM_PREFIX, WASM_CHUNKS, "wasm");
+        statusText.innerText = "DOWNLOADING DATA...";
+        const [dataBlob, wasmBlob] = await Promise.all([
+          loadChunksParallel(DATA_PREFIX, DATA_CHUNKS, "data", 6),
+          loadChunksParallel(WASM_PREFIX, WASM_CHUNKS, "wasm", 2),
+        ]);
 
         const dataUrl = URL.createObjectURL(dataBlob);
         const codeUrl = URL.createObjectURL(wasmBlob);
